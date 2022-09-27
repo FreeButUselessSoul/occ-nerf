@@ -118,7 +118,7 @@ def homo_warp_with_depth(src_feat, proj_mat, depth_values, src_grid=None, ref_g=
     src_grid = src_grid.permute(0, 2, 1)  # (B, D*H*W, 2)
     src_grid = src_grid.view(B, D, W_pad * H_pad, 2)
     warped_src_feat = F.grid_sample(src_feat, src_grid,
-                                    mode='bilinear', padding_mode='zeros',
+                                    mode='nearest', padding_mode='zeros',
                                     align_corners=True)  # (B, C, D, H*W)
     warped_src_feat = warped_src_feat.view(B, -1, D, H_pad, W_pad)
     # src_grid = src_grid.view(B, 1, D, H_pad, W_pad, 2)
@@ -509,7 +509,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
     # shuffle the training imgs
     ids = np.arange(N_img)
     np.random.shuffle(ids)
-    
+    closest = .4
     for i in ids:
         fxfy = focal_net(0)
         ray_dir_cam = comp_ray_dir_cam_fxfy(H, W, fxfy[0], fxfy[1])
@@ -552,7 +552,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
 
         # cost_volume_new = torch.mean(render_result['weight'])#render_result['weight'].permute(2,0,1) * torch.mean(cost_volume,0)
         # (H, W, D)         (D, C', H, W)  
-        cost_volume_loss = torch.mean(render_result['weight']) * 2
+        cost_volume_loss = torch.mean(render_result['weight'])
         bg_result = render_back(c2w.detach(), ray_selected_cam,
                             1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
                             scene_train.near, scene_train.far,
@@ -566,16 +566,16 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         # threshold = min(torch.min(render_result['depth_map'])+.2,0.98)
         # = (torch.clamp(render_result['depth_map'].unsqueeze(-1),threshold,1))/(1-threshold)
         tot_loss = L2_loss+cost_volume_loss
-        if epoch_i>0.3*args.epoch:
-            cmx = torch.cummax(render_result['rgb_density'][...,-1]>0.01,-1)
+        if epoch_i>0.3*args.epoch or args.resume:
+            closest = min(closest, torch.min(render_result['depth_map']))
+            cmx = torch.cummax(render_result['rgb_density'][...,-1]>0.01,-1)[0]
             mask = torch.ones_like(render_result['depth_map']).float()
-            # mask[render_result['depth_map']<threshold]=0
-            
-            ex_mask = (T.GaussianBlur(7)(mask[None,None,:,:])[0,0] > 0.95)
-            masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * ex_mask.detach().unsqueeze(-1))
+            mask[cmx[:,:,int((closest+0.2)*cmx.shape[-1])]>0.5]=0
+            # ex_mask = (T.GaussianBlur(7)(mask[None,None,:,:])[0,0] > 0.95)
+            masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * mask.detach().unsqueeze(-1))
             tot_loss += masked_loss
             if 'rgb_fine' in bg_result.keys():
-                tot_loss += torch.mean((bg_result['rgb_fine'] - img_selected)**2 * ex_mask.detach().unsqueeze(-1))
+                tot_loss += torch.mean((bg_result['rgb_fine'] - img_selected)**2 * mask.detach().unsqueeze(-1))
             
         tot_loss.backward()
         optimizer_nerf.step()
@@ -613,7 +613,7 @@ def main(args):
     shutil.copy('./models/nerf_models.py', experiment_dir)
     shutil.copy('./models/intrinsics.py', experiment_dir)
     shutil.copy('./models/poses.py', experiment_dir)
-    shutil.copy('./tasks/homo/train_homo_back.py', experiment_dir)
+    shutil.copy('./tasks/homo/train_homo_back_sigma.py', experiment_dir)
 
     '''LOG'''
     logger = logging.getLogger()
@@ -708,7 +708,7 @@ def main(args):
 
     if args.resume and args.ckpt_dir is not None and os.path.exists(os.path.join(args.ckpt_dir,'latest_nerf.pth')):
         print("Using saved model checkpoint..")
-        load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerf.pth'),model,optimizer_nerf,map_location=my_devices)
+        load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerf.pth'),model,map_location=my_devices)
         # load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerfback.pth'),model_back,my_devices)
         load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_focal.pth'),focal_net,optimizer_focal,map_location=my_devices)
         load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_pose.pth'),pose_param_net,optimizer_pose,map_location=my_devices)

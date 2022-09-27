@@ -1,8 +1,4 @@
-
-.idea/
-
 data_dir/
-
 logs/
-
 __pycache__/
+nohup.out 
