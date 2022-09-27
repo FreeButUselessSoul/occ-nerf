@@ -118,7 +118,7 @@ def homo_warp_with_depth(src_feat, proj_mat, depth_values, src_grid=None, ref_g=
     src_grid = src_grid.permute(0, 2, 1)  # (B, D*H*W, 2)
     src_grid = src_grid.view(B, D, W_pad * H_pad, 2)
     warped_src_feat = F.grid_sample(src_feat, src_grid,
-                                    mode='nearest', padding_mode='zeros',
+                                    mode='bilinear', padding_mode='zeros',
                                     align_corners=True)  # (B, C, D, H*W)
     warped_src_feat = warped_src_feat.view(B, -1, D, H_pad, W_pad)
     # src_grid = src_grid.view(B, 1, D, H_pad, W_pad, 2)
@@ -381,7 +381,7 @@ def model_render_image(c2w, rays_cam, t_vals, near, far, H, W, fxfy, model, pert
     return result
 
 
-def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_param_net, cost_volume_cnn,
+def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_param_net,
                    my_devices, args, epoch_i, writer, rgb_act_fn):
     model.eval()
     focal_net.eval()
@@ -422,7 +422,7 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
         # cost volume construction here - 0903
         to_matrix = torch.inverse(K @ c2w)
         features,proj_mats = [], []
-        for j in others[:5]:
+        for j in others[:7]:
             c2w_from = pose_param_net(j) # (4,4)
             proj_mats.append( (K @ c2w_from) @ to_matrix)
             features.append(scene_train.features[j])
@@ -490,7 +490,7 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
     return
 
 
-def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose, optimizer_volume, model,model_back, focal_net, pose_param_net, cost_volume_cnn,
+def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose, model,model_back, focal_net, pose_param_net,
                     my_devices, args, rgb_act_fn, epoch_i,progress):
     model.train()
     focal_net.train()
@@ -534,7 +534,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         # cost volume construction here - 0903
         to_matrix = torch.inverse(K @ c2w)
         features,proj_mats = [], []
-        for j in others[:4]:
+        for j in others[:6]:
             c2w_from = pose_param_net(j) # (4,4)
             proj_mats.append( (K @ c2w_from) @ to_matrix)
             features.append(scene_train.features[j])
@@ -547,7 +547,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         render_result = model_render_image(c2w, ray_selected_cam, t_vals, scene_train.near, scene_train.far,
                                            scene_train.H, scene_train.W, fxfy,
                                            model, True, 0.0, args, rgb_act_fn,
-                                        features,torch.stack(proj_mats),pixel_i,cost_volume_cnn,istrain=True,progress=progress)  # (N_select_rows, N_select_cols, 3)
+                                        features,torch.stack(proj_mats),pixel_i,istrain=True,progress=progress)  # (N_select_rows, N_select_cols, 3)
         rgb_rendered = render_result['rgb']  # (N_select_rows, N_select_cols, 3)
 
         # cost_volume_new = torch.mean(render_result['weight'])#render_result['weight'].permute(2,0,1) * torch.mean(cost_volume,0)
@@ -581,11 +581,11 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         optimizer_nerf.step()
         optimizer_focal.step()
         optimizer_pose.step()
-        optimizer_volume.step()
+        # optimizer_volume.step()
         optimizer_nerf.zero_grad()
         optimizer_focal.zero_grad()
         optimizer_pose.zero_grad()
-        optimizer_volume.zero_grad()
+        # optimizer_volume.zero_grad()
         # cost_volume_loss.backward()
         
         
@@ -680,27 +680,24 @@ def main(args):
     else:
         pose_param_net = pose_param_net.to(device=my_devices)
 
-    cost_volume_cnn = nn.Conv2d(640, 32, kernel_size=3,stride=1, padding=1, bias=False)
+    # cost_volume_cnn = nn.Conv2d(640, 32, kernel_size=1,stride=1, padding=0, bias=False)
     #torch.nn.Sequential(
-        # conv(640,256,3),
-        # conv(256,128,3),
-        # conv(128,64,3),
-        # nn.Conv2d(640, 32, kernel_size=3,stride=1, padding=1, bias=False),
-        # conv(640,32,3)
-    # )
+        # conv(640,128,3),
+        # conv(128,32,3),)
+    
     progress = 0
-    if args.multi_gpu:
-        cost_volume_cnn = torch.nn.DataParallel(cost_volume_cnn).to(device=my_devices)
-    else:
-        cost_volume_cnn = cost_volume_cnn.to(device=my_devices)
-    optimizer_volume = torch.optim.Adam(cost_volume_cnn.parameters(), lr=2e-3)
+    # if args.multi_gpu:
+    #     cost_volume_cnn = torch.nn.DataParallel(cost_volume_cnn).to(device=my_devices)
+    # else:
+    #     cost_volume_cnn = cost_volume_cnn.to(device=my_devices)
+    # optimizer_volume = torch.optim.Adam(cost_volume_cnn.parameters(), lr=2e-3)
 
-    if args.resume and os.path.exists(os.path.join(exp_root_dir, 'cost_volume_cnn.pth')):
-        print("Using saved cost volume checkpoint..")
-        epoch_ckpt = load_ckpt_to_net(os.path.join(exp_root_dir, 'cost_volume_cnn.pth'),cost_volume_cnn,optimizer_volume,my_devices)
-        progress = epoch_ckpt/args.epoch
-    else:
-        cost_volume_cnn.apply(init_weights)
+    # if args.resume and os.path.exists(os.path.join(exp_root_dir, 'cost_volume_cnn.pth')):
+    #     print("Using saved cost volume checkpoint..")
+    #     epoch_ckpt = load_ckpt_to_net(os.path.join(exp_root_dir, 'cost_volume_cnn.pth'),cost_volume_cnn,optimizer_volume,my_devices)
+    #     progress = epoch_ckpt/args.epoch
+    # else:
+    #     cost_volume_cnn.apply(init_weights)
     '''Set Optimiser'''
     optimizer_nerf = torch.optim.Adam(list(model.parameters())+list(model_back.parameters()), lr=args.nerf_lr)
     optimizer_focal = torch.optim.Adam(focal_net.parameters(), lr=args.focal_lr)
@@ -708,7 +705,8 @@ def main(args):
 
     if args.resume and args.ckpt_dir is not None and os.path.exists(os.path.join(args.ckpt_dir,'latest_nerf.pth')):
         print("Using saved model checkpoint..")
-        load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerf.pth'),model,map_location=my_devices)
+        epoch_ckpt = load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerf.pth'),model,map_location=my_devices)
+        progress = epoch_ckpt/args.epoch
         # load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerfback.pth'),model_back,my_devices)
         load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_focal.pth'),focal_net,optimizer_focal,map_location=my_devices)
         load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_pose.pth'),pose_param_net,optimizer_pose,map_location=my_devices)
@@ -718,19 +716,19 @@ def main(args):
     scheduler_nerf = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_nerf, args.epoch,min(1e-5,args.nerf_lr))
     scheduler_focal = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_focal, int(args.epoch*0.8),min(5e-5,args.focal_lr))
     scheduler_pose = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_pose, int(args.epoch*0.8),min(5e-5,args.pose_lr))
-    scheduler_volume = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_volume, int(args.epoch),1e-4)
+    # scheduler_volume = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_volume, int(args.epoch),1e-4)
     scene_train.features = [feature.to(my_devices) for feature in scene_train.features]
     '''Training'''
     for epoch_i in tqdm(range(args.epoch), desc='epochs'):
         rgb_act_fn = torch.sigmoid
-        train_epoch_losses = train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose, optimizer_volume,
-                                             model,model_back, focal_net, pose_param_net, cost_volume_cnn, my_devices, args, rgb_act_fn, epoch_i,progress)
+        train_epoch_losses = train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose,
+                                             model,model_back, focal_net, pose_param_net, my_devices, args, rgb_act_fn, epoch_i,progress)
         train_L2_loss = train_epoch_losses['L2']
         train_cost_volume_loss = train_epoch_losses['cost_volume']
         scheduler_nerf.step()
         scheduler_focal.step()
         scheduler_pose.step()
-        scheduler_volume.step()
+        # scheduler_volume.step()
 
         train_psnr = mse2psnr(train_L2_loss)
         writer.add_scalar('train/mse', train_L2_loss, epoch_i)
@@ -745,7 +743,7 @@ def main(args):
 
         if epoch_i % args.eval_interval == 0 and epoch_i > 0:
             with torch.no_grad():
-                eval_one_epoch(eval_c2ws, scene_train, model,model_back, focal_net, pose_param_net,cost_volume_cnn, my_devices, args, epoch_i, writer, rgb_act_fn)
+                eval_one_epoch(eval_c2ws, scene_train, model,model_back, focal_net, pose_param_net, my_devices, args, epoch_i, writer, rgb_act_fn)
 
                 fxfy = focal_net(0)
                 tqdm.write('Est fx: {0:.2f}, fy {1:.2f}'.format(fxfy[0].item(), fxfy[1].item()))
