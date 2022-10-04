@@ -1,0 +1,1 @@
+nohup python tasks/homo/train_homo_back_sigma.py --base_dir ~/data/sigGraph15/ --scene_name fence1/images --resize_ratio 2 --gpu_id 0 --alias 2stage --pose_lr 3e-3 --focal_lr 2e-3 --nerf_lr 1e-3 --fx_only True --num_rows_eval_img 5 &
