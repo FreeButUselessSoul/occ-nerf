@@ -573,7 +573,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
 
         # cost_volume_new = torch.mean(render_result['weight'])#render_result['weight'].permute(2,0,1) * torch.mean(cost_volume,0)
         # (H, W, D)         (D, C', H, W)  
-        cost_volume_loss = 50*torch.mean(render_result['cost_volume'])
+        
         bg_result = render_back(c2w.clone(), ray_selected_cam,
                             t_vals,
                             # 1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
@@ -587,8 +587,9 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         L2_loss = F.mse_loss(rgb_rendered, img_selected)
         # threshold = min(torch.min(render_result['depth_map'])+.2,0.98)
         # = (torch.clamp(render_result['depth_map'].unsqueeze(-1),threshold,1))/(1-threshold)
-        tot_loss = L2_loss+cost_volume_loss
+        tot_loss = L2_loss
         if epoch_i>0.3*args.epoch or args.resume:
+            cost_volume_loss = torch.Tensor([0])
             # import ipdb;ipdb.set_trace()
             ## dens = render_result['weight'].clone().detach()
             ## mask = occlusion_net(dens) # 1:background, 0:foreground
@@ -601,7 +602,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
             # new_mask = mask.clone().detach()
             # new_mask[new_mask<0.5]=0;new_mask[new_mask>0.5]=1
             masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * binary_mask.unsqueeze(-1))+\
-                        0.01*torch.mean(torch.mean(torch.abs(bg_result['rgb_density'] - render_result['rgb_density'].detach()),-2) * (-torch.log(mask)).unsqueeze(-1))
+                        0.01*torch.mean(torch.mean(torch.abs(bg_result['rgb_density'] - render_result['rgb_density'].detach()),-2) * (1-binary_mask).unsqueeze(-1))
             # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 / (2*mask.unsqueeze(-1)**2))
             tot_loss += masked_loss
             bdc_loss = torch.mean(torch.abs(bg_result['depth_reverse'] - bg_result['depth_map']))
@@ -611,6 +612,8 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
             if 'rgb_fine' in bg_result.keys():
                 tot_loss += torch.mean((bg_result['rgb_fine'] - img_selected)**2 * mask.unsqueeze(-1))
         else:
+            cost_volume_loss = 50*torch.mean(render_result['cost_volume'])
+            tot_loss += cost_volume_loss
             masked_loss = torch.Tensor([0])
             
         tot_loss.backward()
