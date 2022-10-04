@@ -359,7 +359,7 @@ def model_render_image(c2w, rays_cam, t_vals, near, far, H, W, fxfy, model, pert
         # if progress > 0.15:
         #     result['weight'] = render_result['weight'] * torch.mean(cost_volume,-1)
         # else:
-        result['cost_volume'] = render_result['weight'] * torch.sum(cost_volume,-1)
+        result['cost_volume'] = render_result['weight'] * torch.mean(cost_volume,-1)
         # result['bg_rgb'] = render_result['bg_rgb']
         # result['bg_depth'] = render_result['bg_depth_map']
 
@@ -573,7 +573,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
 
         # cost_volume_new = torch.mean(render_result['weight'])#render_result['weight'].permute(2,0,1) * torch.mean(cost_volume,0)
         # (H, W, D)         (D, C', H, W)  
-        cost_volume_loss = 0.1*torch.mean(render_result['cost_volume'])
+        cost_volume_loss = 1*torch.mean(render_result['cost_volume'])
         bg_result = render_back(c2w.clone(), ray_selected_cam,
                             t_vals,
                             # 1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
@@ -592,7 +592,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
             # import ipdb;ipdb.set_trace()
             ## dens = render_result['weight'].clone().detach()
             ## mask = occlusion_net(dens) # 1:background, 0:foreground
-            mask = render_result['depth_reverse'] - render_result['depth_map']
+            mask = (render_result['depth_reverse'] - render_result['depth_map']).detach()
             binary_mask = mask<0.30
             # mask[mask>0.5]=1;mask[mask<=0.5]=0
             # cmx = torch.cummax(dens>torch.mean(dens,dim=-1,keepdim=True),-1)[0]
