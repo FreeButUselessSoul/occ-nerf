@@ -593,19 +593,16 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
             # cmx = torch.cummax(dens>torch.mean(dens,dim=-1,keepdim=True),-1)[0]
             # mask = torch.ones_like(render_result['depth_map']).float()
             # mask[cmx[:,:,int((closest+0.2)*cmx.shape[-1])]>0.5]=0
-            # new_mask = mask.clone().detach()
-            # new_mask[new_mask<0.5]=0;new_mask[new_mask>0.5]=1
-            # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * mask.unsqueeze(-1))
-            # mask = torch.tan(mask/2*np.pi)
             new_mask = mask.clone()
-            new_mask[mask>0.5]*=1e3
-            # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 / (2*new_mask.unsqueeze(-1)**2))
-            masked_loss = torch.mean( (bg_result['rgb'] - img_selected)**2 * (-torch.log(mask)).unsqueeze(-1) )
+            new_mask[new_mask<0.5]=0;new_mask[new_mask>0.5]=1
+            # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * mask.unsqueeze(-1))
+            masked_loss = torch.mean( (bg_result['rgb'] - img_selected)**2 * new_mask.unsqueeze(-1) )\
+                +0.01*torch.mean(torch.mean(torch.abs(bg_result['rgb_density'] - render_result['rgb_density'].detach()),-2) * (-torch.log(mask)).unsqueeze(-1))
             tot_loss += masked_loss
             bdc_loss = torch.mean(torch.abs(bg_result['depth_reverse'] - bg_result['depth_map']))
             tot_loss += 0.01*bdc_loss
             # mask_regularizer = 8e-3*torch.mean((1-mask)**2)
-            mask_regularizer = torch.log(mask).mean()
+            mask_regularizer = torch.mean(mask**2) #torch.log(mask).mean()
             tot_loss += mask_regularizer
             if 'rgb_fine' in bg_result.keys():
                 tot_loss += torch.mean((bg_result['rgb_fine'] - img_selected)**2 * mask.unsqueeze(-1))
