@@ -1,3 +1,4 @@
+from turtle import backward
 import torch
 
 
@@ -245,4 +246,64 @@ def volume_rendering(rgb_density, t_vals, sigma_noise_std, rgb_act_fn, density2=
         depth_map_2 = torch.sum(weight_2 * t_vals, dim=2)  # (H, W)
         result['bg_rgb'] = rgb_rendered_2
         result['bg_depth_map'] = depth_map_2
+    return result
+
+def bidirection_rendering(rgb_density, t_vals, sigma_noise_std, rgb_act_fn):
+    """
+    :param rgb_density:     (H, W, N_sample, 4)     network output
+    :param t_vals:          (H, W, N_sample)        compute the distance between each sample points
+    :param sigma_noise_std: A scalar                add some noise to the density output, this is helpful to reduce
+                                                    floating artifacts according to official repo, but they set it to
+                                                    zero in their implementation.
+    :param rgb_act_fn:      relu()                  apply an active fn to the raw rgb output to get actual rgb
+    :return:                (H, W, 3)               rendered rgb image
+                            (H, W, N_sample)        weights at each sample position
+    """
+    ray_H, ray_W, num_sample = t_vals.shape[0], t_vals.shape[1], t_vals.shape[2]
+
+    rgb = rgb_act_fn(rgb_density[:, :, :, :3])  # (H, W, N_sample, 3)
+    sigma_a = rgb_density[:, :, :, 3]  # (H, W, N_sample)
+
+    if sigma_noise_std > 0.0:
+        sigma_noise = torch.randn_like(sigma_a) * sigma_noise_std
+        sigma_a = sigma_a + sigma_noise  # (H, W, N_sample)
+
+    sigma_a = sigma_a.relu()  # (H, W, N_sample)
+
+    # Compute distances between samples.
+    # 1. compute the distances among first (N-1) samples
+    # 2. the distance between the LAST sample and infinite far is 1e10
+    dists = t_vals[:, :, 1:] - t_vals[:, :, :-1]  # (H, W, N_sample-1)
+    dist_far = torch.empty(size=(ray_H, ray_W, 1), dtype=torch.float32, device=dists.device).fill_(1e10)  # (H, W, 1)
+    dists = torch.cat([dists, dist_far], dim=2)  # (H, W, N_sample)
+
+    alpha = 1 - torch.exp(-1.0 * sigma_a * dists)  # (H, W, N_sample)
+
+    # 1. We expand the exp(a+b) to exp(a) * exp(b) for the accumulated transmittance computing.
+    # 2. For the space at the boundary far to camera, the alpha is constant 1.0 and the transmittance at the far boundary
+    # is useless. For the space at the boundary near to camera, we manually set the transmittance to 1.0, which means
+    # 100% transparent. The torch.roll() operation simply discards the transmittance at the far boundary.
+    acc_transmittance = torch.cumprod(1.0 - alpha + 1e-10, dim=2)  # (H, W, N_sample)
+    acc_transmittance = torch.roll(acc_transmittance, shifts=1, dims=2)  # (H, W, N_sample)
+    acc_transmittance[:, :, 0] = 1.0  # (H, W, N_sample)
+
+    backward_tranmittance = torch.cumprod(1.0 - alpha.flip(-1) + 1e-10, dim=2)
+    backward_tranmittance = torch.roll(backward_tranmittance, shifts=1, dims=2)
+    backward_tranmittance[:,:,0]=1.0
+
+    weight = acc_transmittance * alpha  # (H, W, N_sample)
+    backward_weight = backward_tranmittance * alpha.flip(-1)
+
+    # (H, W, N_sample, 1) * (H, W, N_sample, 3) = (H, W, N_sample, 3) -> (H, W, 3)
+    rgb_rendered = torch.sum(weight.unsqueeze(3) * rgb, dim=2)
+
+    depth_map = torch.sum(weight * t_vals, dim=2)  # (H, W)
+    depth_reverse = torch.sum(backward_weight * t_vals.flip(-1), dim=2)
+    # offset = torch.sum(weight * (torch.clamp( (depth_map.unsqueeze(-1) - t_vals)**2,0.1)-0.1),dim=2)
+    result = {
+        'rgb': rgb_rendered,  # (H, W, 3)
+        'weight': weight,  # (H, W, N_sample)
+        'depth_map': depth_map,  # (H, W)
+        'depth_reverse': depth_reverse,
+    }
     return result

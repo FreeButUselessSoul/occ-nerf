@@ -1,3 +1,4 @@
+from cmath import inf
 import sys
 import os
 import argparse
@@ -307,8 +308,8 @@ def model_render_image(c2w, rays_cam, t_vals, near, far, H, W, fxfy, model, pert
                 t_vals_noisy.flatten(0,1)[None,...].repeat(len(proj_mats),1,1),
                 ref_g = pixel_i.repeat(len(proj_mats),1,1,1)
                 ) # (B C D H W)
-        # temp_shape = list(warpped_features.shape)
-        # temp_shape[1],temp_shape[2]=temp_shape[2],32
+        temp_shape = list(warpped_features.shape)
+        temp_shape[1],temp_shape[2]=temp_shape[2],32
         # warpped_features = cost_volume_cnn(warpped_features.transpose(1,2).flatten(0,1)).view(temp_shape).transpose(1,2) # B,C,D,H,W
         cost_volume = non_nan_var(warpped_features, 0).permute(2,3,1,0) # B,C',D,H,W
     # encode position: (H, W, N_sample, (2L+1)*C = 63)
@@ -327,7 +328,7 @@ def model_render_image(c2w, rays_cam, t_vals, near, far, H, W, fxfy, model, pert
     
     # render_result = volume_rendering(rgb_density, t_vals_noisy, sigma_noise_std, rgb_act_fn)
     # if istrain:
-    render_result = bidirection_rendering(rgb_density, t_vals_noisy, sigma_noise_std, rgb_act_fn)
+    render_result = volume_rendering(rgb_density, t_vals_noisy, sigma_noise_std, rgb_act_fn)
     # else:
     #     density = rgb_density[...,-1].clone()
     #     # deriv = torch.cat([density[:,:,1:]-density[:,:,:-1],torch.zeros_like(density[:,:,[0]])],-1)
@@ -352,14 +353,13 @@ def model_render_image(c2w, rays_cam, t_vals, near, far, H, W, fxfy, model, pert
             'depth_map': depth_map,  # (H, W)
             'rgb_density': rgb_density,  # (H, W, N_sample, 4) 
             'weight': render_result['weight'],
-            'depth_reverse':render_result['depth_reverse'],
         }
 
     if istrain:
         # if progress > 0.15:
         #     result['weight'] = render_result['weight'] * torch.mean(cost_volume,-1)
         # else:
-        result['cost_volume'] = render_result['weight'] * torch.sum(cost_volume,-1)
+        result['cost_volume'] =  render_result['weight'] * torch.sum(cost_volume,-1)
         # result['bg_rgb'] = render_result['bg_rgb']
         # result['bg_depth'] = render_result['bg_depth_map']
 
@@ -452,11 +452,9 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
                                                scene_train.H, scene_train.W, fxfy,
                                                model, False, 0.0, args, rgb_act_fn,istrain=False,
                                                )
-            back_render = render_back(c2w, rays_dir_rows,
-                t_vals,
-                # 1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
-                scene_train.near, scene_train.far, scene_train.H, scene_train.W, fxfy,
-                model_back, False, 0.0, args, rgb_act_fn)
+            back_render = render_back(c2w, rays_dir_rows, 1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps), scene_train.near, scene_train.far,
+                                               scene_train.H, scene_train.W, fxfy,
+                                               model_back, False, 0.0, args, rgb_act_fn)
             if 'rgb_fine' in render_result.keys():
                 rgb_rendered_rows = render_result['rgb_fine']  # (num_rows_eval_img, W, 3)
                 depth_map = render_result['depth_fine']  # (num_rows_eval_img, W)
@@ -467,9 +465,8 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
                 bg_depth_map = back_render['depth_map']
                 bg_depth_map_R = back_render['depth_reverse']
 
-                # dens = render_result['weight'].clone().detach()
-                # mask = occlusion_net(dens)
-                mask = (render_result['depth_reverse'] - render_result['depth_map'])<0.30
+                dens = render_result['weight'].clone().detach()
+                mask = occlusion_net(dens)
 
 
             rendered_img.append(rgb_rendered_rows)
@@ -484,7 +481,7 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
         rendered_depth = torch.cat(rendered_depth, dim=0).unsqueeze(0)  # (1, H, W)
         bg_img = torch.cat(bg_img, 0)
         bg_depth = torch.cat(bg_depth,0).unsqueeze(0)
-        pred_mask = torch.cat(pred_mask,0).unsqueeze(0)
+        pred_mask = torch.cat(pred_mask,0)
 
         # for vis
         rendered_img_list.append(rendered_img.cpu().numpy())
@@ -499,7 +496,7 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
     bg_disp_img = np.transpose(bg_img_list[rand_num], (2, 0, 1))  # (3, H, W)
     disp_depth = rendered_depth_list[rand_num]  # (1, H, W)
     bg_disp_depth = bg_depth_list[rand_num]
-    mask_disp = pred_mask_list[rand_num]
+    mask_disp = np.transpose(pred_mask_list[rand_num], (2,0,1))
     writer.add_image('img/eval', disp_img, global_step=epoch_i)
     writer.add_image('depth/eval', disp_depth, global_step=epoch_i)
     if epoch_i>0.3*args.epoch or args.resume:
@@ -573,12 +570,12 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
 
         # cost_volume_new = torch.mean(render_result['weight'])#render_result['weight'].permute(2,0,1) * torch.mean(cost_volume,0)
         # (H, W, D)         (D, C', H, W)  
-        cost_volume_loss = 0.1*torch.mean(render_result['cost_volume'])
-        bg_result = render_back(c2w.clone(), ray_selected_cam,
-                            t_vals,
-                            # 1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
+        cost_volume_loss = torch.mean(render_result['cost_volume'])
+        bg_result = render_back(c2w.detach(), ray_selected_cam,
+        # t_vals,
+                            1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
                             scene_train.near, scene_train.far,
-                            scene_train.H, scene_train.W, fxfy.clone(),
+                            scene_train.H, scene_train.W, fxfy.detach(),
                             model_back, True, 0.0, args, rgb_act_fn)
         # if 'rgb_fine' in render_result.keys():
         #     rgb_fine = render_result['rgb_fine']
@@ -590,24 +587,26 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         tot_loss = L2_loss+cost_volume_loss
         if epoch_i>0.3*args.epoch or args.resume:
             # import ipdb;ipdb.set_trace()
-            ## dens = render_result['weight'].clone().detach()
-            ## mask = occlusion_net(dens) # 1:background, 0:foreground
-            mask = render_result['depth_reverse'] - render_result['depth_map']
-            binary_mask = mask<0.30
+            dens = render_result['weight'].clone().detach()
+            mask = occlusion_net(dens) # 1:background, 0:foreground
             # mask[mask>0.5]=1;mask[mask<=0.5]=0
             # cmx = torch.cummax(dens>torch.mean(dens,dim=-1,keepdim=True),-1)[0]
             # mask = torch.ones_like(render_result['depth_map']).float()
             # mask[cmx[:,:,int((closest+0.2)*cmx.shape[-1])]>0.5]=0
             # new_mask = mask.clone().detach()
             # new_mask[new_mask<0.5]=0;new_mask[new_mask>0.5]=1
-            masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * binary_mask.unsqueeze(-1))+\
-                        0.01*torch.mean(torch.mean(torch.abs(bg_result['rgb_density'] - render_result['rgb_density'].detach()),-2) * (-torch.log(mask)).unsqueeze(-1))
-            # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 / (2*mask.unsqueeze(-1)**2))
+            # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * mask.unsqueeze(-1))
+            # mask = torch.tan(mask/2*np.pi)
+            new_mask = mask.clone()
+            new_mask[mask>0.5]*=1e3
+            # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 / (2*new_mask.unsqueeze(-1)**2))
+            masked_loss = torch.mean( (bg_result['rgb'] - img_selected)**2 * (-torch.log(mask)).unsqueeze(-1) )
             tot_loss += masked_loss
-            bdc_loss = torch.mean((bg_result['depth_reverse'] - bg_result['depth_map'])**2)
-            tot_loss += bdc_loss
-            # mask_regularizer = 1e-2*torch.mean((1-mask)**2)
-            # tot_loss += mask_regularizer
+            bdc_loss = torch.mean(torch.abs(bg_result['depth_reverse'] - bg_result['depth_map']))
+            tot_loss += 0.01*bdc_loss
+            # mask_regularizer = 8e-3*torch.mean((1-mask)**2)
+            mask_regularizer = torch.log(mask).mean()
+            tot_loss += mask_regularizer
             if 'rgb_fine' in bg_result.keys():
                 tot_loss += torch.mean((bg_result['rgb_fine'] - img_selected)**2 * mask.unsqueeze(-1))
         else:
@@ -654,7 +653,7 @@ def main(args):
     shutil.copy('./models/nerf_models.py', experiment_dir)
     shutil.copy('./models/intrinsics.py', experiment_dir)
     shutil.copy('./models/poses.py', experiment_dir)
-    shutil.copy('./tasks/homo/train_homo_back_sigma.py', experiment_dir)
+    shutil.copy('./tasks/homo/train_homo_maskDL.py', experiment_dir)
 
     '''LOG'''
     logger = logging.getLogger()
