@@ -548,7 +548,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
 ##
         others = np.concatenate( [np.arange(i),np.arange(i+1,N_img)], 0 )
         np.random.shuffle(others)
-        others = np.concatenate( [[i], others], 0)
+        # others = np.concatenate( [[i], others], 0)
         
         # c2ws_all = torch.stack([pose_param_net(j) for j in range(N_img)],0)
         # others = torch.argsort(torch.sum((c2ws_all-c2w)[:,:3,3]**2,axis=-1),descending=True)
@@ -573,7 +573,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
 
         # cost_volume_new = torch.mean(render_result['weight'])#render_result['weight'].permute(2,0,1) * torch.mean(cost_volume,0)
         # (H, W, D)         (D, C', H, W)  
-        cost_volume_loss = 1*torch.mean(render_result['cost_volume'])
+        cost_volume_loss = 50*torch.mean(render_result['cost_volume'])
         bg_result = render_back(c2w.clone(), ray_selected_cam,
                             t_vals,
                             # 1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
@@ -604,8 +604,8 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
                         0.01*torch.mean(torch.mean(torch.abs(bg_result['rgb_density'] - render_result['rgb_density'].detach()),-2) * (-torch.log(mask)).unsqueeze(-1))
             # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 / (2*mask.unsqueeze(-1)**2))
             tot_loss += masked_loss
-            bdc_loss = torch.mean((bg_result['depth_reverse'] - bg_result['depth_map'])**2)
-            tot_loss += bdc_loss
+            bdc_loss = torch.mean(torch.abs(bg_result['depth_reverse'] - bg_result['depth_map']))
+            tot_loss += 0.1*bdc_loss
             # mask_regularizer = 1e-2*torch.mean((1-mask)**2)
             # tot_loss += mask_regularizer
             if 'rgb_fine' in bg_result.keys():
