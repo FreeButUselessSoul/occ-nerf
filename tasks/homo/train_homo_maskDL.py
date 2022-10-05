@@ -598,7 +598,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
             new_mask = mask<0.5
             # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * mask.unsqueeze(-1))
             masked_loss = torch.mean( (bg_result['rgb'] - img_selected)**2 * new_mask.unsqueeze(-1) )\
-                +0.01*torch.mean(torch.mean(torch.abs(bg_result['rgb_density'][...,-1] - render_result['rgb_density'][...,-1].detach()),-2) * (-torch.log(mask)).unsqueeze(-1))
+                +0.01*torch.mean(torch.mean(torch.abs(bg_result['rgb_density'][...,-1] - render_result['rgb_density'][...,-1].detach()),-2) * (~new_mask).unsqueeze(-1))
             bdc_loss = 0.1*torch.mean(torch.abs(bg_result['depth_reverse'] - bg_result['depth_map']))
             # mask_regularizer = 8e-3*torch.mean((1-mask)**2)
             mask_regularizer = torch.mean(mask**2) #torch.log(mask).mean()

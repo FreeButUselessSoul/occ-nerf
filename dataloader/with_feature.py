@@ -22,7 +22,7 @@ class Vgg19(torch.nn.Module):
     def forward(self, X, indices=None):
         # self.feature_shape = X.shape
         if indices is None:
-            indices = [7,14,21]
+            indices = [7,21]
         out = []
         for i in range(indices[-1]):
             X = self.vgg_pretrained_features[i](X)

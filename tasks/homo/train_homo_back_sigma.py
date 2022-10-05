@@ -583,11 +583,11 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         # threshold = min(torch.min(render_result['depth_map'])+.2,0.98)
         # = (torch.clamp(render_result['depth_map'].unsqueeze(-1),threshold,1))/(1-threshold)
         if epoch_i>0.3*args.epoch or args.resume:
-            bg_result = render_back(c2w.clone(), ray_selected_cam,
+            bg_result = render_back(c2w.detach(), ray_selected_cam,
                             t_vals,
                             # 1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
                             scene_train.near, scene_train.far,
-                            scene_train.H, scene_train.W, fxfy.clone(),
+                            scene_train.H, scene_train.W, fxfy.detach(),
                             model_back, True, 0.0, args, rgb_act_fn)
             # import ipdb;ipdb.set_trace()
             ## dens = render_result['weight'].clone().detach()
@@ -601,12 +601,12 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
             # new_mask = mask.clone().detach()
             # new_mask[new_mask<0.5]=0;new_mask[new_mask>0.5]=1
             masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 * binary_mask.unsqueeze(-1))+\
-                        0.01*torch.mean(torch.mean(torch.abs(bg_result['rgb_density'] - render_result['rgb_density'].detach()),-2) * (-torch.log(mask)).unsqueeze(-1))
+                        0.01*torch.mean(torch.mean((bg_result['rgb_density'][...,:-1] - render_result['rgb_density'][...,:-1].detach())**2,-2) * (~binary_mask).unsqueeze(-1))
             # masked_loss = torch.mean((bg_result['rgb'] - img_selected)**2 / (2*mask.unsqueeze(-1)**2))
-            bdc_loss = 0.1*torch.mean(torch.abs(bg_result['depth_reverse'] - bg_result['depth_map']))
+            bdc_loss = 0.1*torch.mean((bg_result['depth_reverse'] - bg_result['depth_map']) ** 2)
             # mask_regularizer = 1e-2*torch.mean((1-mask)**2)
             # tot_loss += mask_regularizer
-            tot_loss = L2_loss + cost_volume_loss + masked_loss + bdc_loss
+            tot_loss = L2_loss + masked_loss + bdc_loss
             # if 'rgb_fine' in bg_result.keys():
             #     tot_loss += torch.mean((bg_result['rgb_fine'] - img_selected)**2 * mask.unsqueeze(-1))
         else:
@@ -809,7 +809,7 @@ def main(args):
                 save_checkpoint(epoch_i, model_back, optimizer_nerf, experiment_dir, ckpt_name='latest_nerfback')
                 save_checkpoint(epoch_i, focal_net, optimizer_focal, experiment_dir, ckpt_name='latest_focal')
                 save_checkpoint(epoch_i, pose_param_net, optimizer_pose, experiment_dir, ckpt_name='latest_pose')
-                save_checkpoint(epoch_i, occlusion_net, optimizer_occ_detect, exp_root_dir, ckpt_name='latest_mask')
+                # save_checkpoint(epoch_i, occlusion_net, optimizer_occ_detect, exp_root_dir, ckpt_name='latest_mask')
     return
 
 
