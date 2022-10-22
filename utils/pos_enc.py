@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-
+import numpy as np
 
 def encode_position(input, levels, inc_input):
     """
@@ -16,13 +16,22 @@ def encode_position(input, levels, inc_input):
 
     # this is already doing 'log_sampling' in the official code.
     result_list = [input] if inc_input else []
-    for i in range(levels):
-        temp = 2.0**i * input  # (..., C)
-        result_list.append(torch.sin(temp))  # (..., C)
-        result_list.append(torch.cos(temp))  # (..., C)
+    temp = torch.cat([2.**i * input for i in range(levels)],-1)
+    result_list.append(torch.sin(temp))
+    result_list.append(torch.cos(temp))
 
     result_list = torch.cat(result_list, dim=-1)  # (..., C*(2L+1)) The list has (2L+1) elements, with (..., C) shape each.
     return result_list  # (..., C*(2L+1))
+
+def barf_encode_position(input, levels, inc_input, progress=1):
+    result_list = [input] if inc_input else []
+    progress = progress*2+0.1
+    res = encode_position(input, levels, False) # 
+    k = torch.arange(levels, dtype=torch.float32, device=input.device)
+    weight = (1-(progress * levels - k).clamp_(min=0,max=1).mul_(np.pi).cos_())/2
+    shape = res.shape
+    result_list.append((res.view(-1,levels) * weight).view(*shape))
+    return torch.cat(result_list, -1)
 
 class hash_position(nn.Module):
     def __init__(self,bounding_box, n_levels=16, n_features_per_level=2,\

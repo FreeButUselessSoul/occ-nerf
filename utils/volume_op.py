@@ -122,6 +122,24 @@ def volume_sampling(c2w, ray_dir_cam, t_vals, near, far, perturb_t):
 
     return sample_pos, ray_ori_world, ray_dir_world, t_vals_noisy  # (H, W, N_sample, 3), (3, ), (H, W, 3), (H, W, N_sam)
 
+def get_ray_dir(c2w, ray_dir_cam, t_vals, H, W, focal):
+    ray_H, ray_W = ray_dir_cam.shape[0], ray_dir_cam.shape[1]
+    N_sam = t_vals.shape[0]
+    ray_dir_world = torch.matmul(c2w[:3, :3].view(1, 1, 3, 3),
+                                 ray_dir_cam.unsqueeze(3)).squeeze(3)  # (1, 1, 3, 3) * (H, W, 3, 1) -> (H, W, 3)
+    ray_ori_world = c2w[:3, 3]  # the translation vector (3, )
+
+    ray_dir_world = ray_dir_world.reshape(-1, 3)  # (H, W, 3) -> (H*W, 3)
+    ray_ori_world = ray_ori_world.view(1, 3).expand_as(ray_dir_world)  # (3, ) -> (1, 3) -> (H*W, 3)
+    non_NDC_info = [ray_ori_world.reshape(ray_H, ray_W, 3),ray_dir_world.reshape(ray_H, ray_W, 3)]
+    if isinstance(focal, float):
+        ray_ori_world, ray_dir_world = get_ndc_rays(H, W, focal, 1.0, rays_o=ray_ori_world, rays_d=ray_dir_world)  # (H*W, 3)
+    else:  # if focal is a tensor contains fxfy
+        ray_ori_world, ray_dir_world = get_ndc_rays_fxfy(H, W, focal, 1.0, rays_o=ray_ori_world,
+                                                         rays_d=ray_dir_world)
+    anchor_point = (ray_ori_world-(ray_ori_world[...,-1]/ray_dir_world[...,-1]).unsqueeze(-1)*ray_dir_world)[...,:2]
+    anchor_point2 = (ray_ori_world+(1.-ray_ori_world[...,-1]/ray_dir_world[...,-1]).unsqueeze(-1)*ray_dir_world)[...,:2]
+    return torch.cat([anchor_point2, anchor_point],-1) # 4
 
 def volume_sampling_ndc(c2w, ray_dir_cam, t_vals, near, far, H, W, focal, perturb_t, use_disp=False, output_raw=False):
     """
