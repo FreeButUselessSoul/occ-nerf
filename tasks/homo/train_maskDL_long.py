@@ -510,7 +510,7 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
     writer.add_image('img/eval', disp_img, global_step=epoch_i)
     writer.add_image('depth/eval', disp_depth, global_step=epoch_i)
     writer.add_image('mask/output', mask_disp, global_step=epoch_i)
-    writer.add_image('mask/binary', (mask_disp<0.4)*0.5+(mask_disp<0.5)*0.5, global_step=epoch_i)
+    writer.add_image('mask/binary', (mask_disp<0.5), global_step=epoch_i)
     if epoch_i>0.3*args.epoch or args.resume:
         writer.add_image('img/bg',bg_disp_img, global_step=epoch_i)
         writer.add_image('depth/bg', bg_disp_depth, global_step=epoch_i)
