@@ -25,6 +25,6 @@ class Vgg19(torch.nn.Module):
                 if self.feature_shape is None:
                     self.feature_shape = X.shape
                 else:
-                    X = F.interpolate(X,self.feature_shape[-2:],mode='bilinear',align_corners=True)
+                    X = F.interpolate(X,self.feature_shape[-2:],mode='nearest')#,align_corners=True)
                 out.append(X)
         return torch.cat(out,1)

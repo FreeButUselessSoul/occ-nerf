@@ -8,6 +8,7 @@ from torch import nn
 import numpy as np
 from tqdm import tqdm
 import imageio
+from torch.nn import functional as F
 
 sys.path.append(os.path.join(sys.path[0], '../..'))
 
@@ -17,7 +18,7 @@ from utils.pose_utils import create_spiral_poses
 from utils.comp_ray_dir import comp_ray_dir_cam_fxfy
 from utils.lie_group_helper import convert3x4_4x4
 from models.nerf_models import fullNeRF
-from tasks.homo.train_maskDL_FT import model_render_image,render_back
+from tasks.homo.train_maskDL_long import model_render_image,render_back
 from models.intrinsics import LearnFocal
 from models.poses import LearnPose
 
@@ -39,6 +40,7 @@ def parse_args():
     parser.add_argument('--learn_t', default=False, type=bool)
 
     parser.add_argument('--init_focal_colmap', default=False, type=bool)
+    parser.add_argument('--N_importance', type=int, default=0, help='number samples along a ray')
 
     parser.add_argument('--resize_ratio', type=int, default=4, help='lower the image resolution with this ratio')
     parser.add_argument('--num_rows_eval_img', type=int, default=10, help='split a high res image to rows in eval')
@@ -75,6 +77,7 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
     fxfy = focal_net(0)
     ray_dir_cam = comp_ray_dir_cam_fxfy(H, W, fxfy[0], fxfy[1])
     t_vals = torch.linspace(near, far, args.num_sample, device=my_devices)  # (N_sample,) sample position
+    # t_vals = 1/(1/(near+1e-15) * (1 - t_steps) + 1/far * t_steps)
     N_img = c2ws.shape[0]
 
     rendered_img_list = []
@@ -96,11 +99,13 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
 
         for rays_dir_rows in rays_dir_cam_split_rows:
             render_result = model_render_image(c2w, rays_dir_rows, t_vals, near, far, H, W, fxfy,
-                                               model, False, 0.0, args, rgb_act_fn=torch.sigmoid,istrain=False,progress=1)
+                                               model, False, 0.0,args,rgb_act_fn=torch.sigmoid,istrain=False,progress=1)
             rgb_rendered_rows = render_result['rgb']  # (num_rows_eval_img, W, 3)
             depth_map = render_result['depth_map']  # (num_rows_eval_img, W)
             dens = render_result['weight'].clone().detach()
             dens = torch.cat([dens, render_result['depth_map'].unsqueeze(-1).clone().detach(), render_result['depth_reverse'].unsqueeze(-1).clone().detach()], -1)
+            # dens = render_result['rgb_density'][...,-1].clone().detach()
+            # dens = F.normalize(dens,dim=-1)
             # dir_ = get_ray_dir(c2w, rays_dir_rows, t_vals, scene_train.H, scene_train.W, fxfy)
             # mask = occlusion_net(encode_position(dir_,2,True)).reshape(depth_map.shape[0],depth_map.shape[1],1)
             mask_row = occlusion_net(dens).squeeze(-1)
@@ -109,8 +114,8 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
             rendered_img.append(rgb_rendered_rows)
             rendered_depth.append(depth_map)
             mask.append(mask_row)
-            back_img.append(back_results['rgb'])
-            back_depth.append(back_results['depth_map'])
+            back_img.append(back_results['rgb_fine'] if 'rgb_fine' in back_results.keys() else back_results['rgb'])
+            back_depth.append(back_results['depth_fine'] if 'depth_fine' in back_results.keys() else back_results['depth_map'])
             
         # combine rows to an image
         rendered_img = torch.cat(rendered_img, dim=0)  # (H, W, 3)
@@ -234,7 +239,7 @@ def main(args):
         occlusion_net = torch.nn.DataParallel(occlusion_net).to(device=my_devices)
     else:
         occlusion_net = occlusion_net.to(device=my_devices)
-    load_ckpt_to_net(os.path.join(args.ckpt_dir, '../latest_mask.pth'), occlusion_net, map_location=my_devices)
+    load_ckpt_to_net(os.path.join(args.ckpt_dir, 'latest_mask.pth'), occlusion_net, map_location=my_devices)
 
     learned_poses = torch.stack([pose_param_net(i) for i in range(scene_train.N_imgs)])
     print("All Models Loaded.")
@@ -244,10 +249,23 @@ def main(args):
     # given in the original repo. Mathematically if near=1
     # and far=infinity, then this number will converge to 4
     N_novel_imgs = args.N_img_per_circle * args.N_circle_traj
-    focus_depth = 3.5
-    radii = np.percentile(np.abs(learned_poses.cpu().numpy()[:, :3, 3]), args.spiral_mag_percent, axis=0)  # (3,)
-    radii *= np.array(args.spiral_axis_scale)
-    c2ws = create_spiral_poses(radii, focus_depth, n_circle=args.N_circle_traj, n_poses=N_novel_imgs)
+    # focus_depth = 3.5
+    # radii = np.percentile(np.abs(learned_poses.cpu().numpy()[:, :3, 3]), args.spiral_mag_percent, axis=0)  # (3,)
+    # radii *= np.array(args.spiral_axis_scale)
+    # c2ws = create_spiral_poses(radii, focus_depth, n_circle=args.N_circle_traj, n_poses=N_novel_imgs)
+    N_frames = 60
+    radii = np.linspace(0, np.pi*2, N_frames)
+    # dx = np.linspace(0, 0.3, N_frames)
+    # dy = np.linspace(0, 0, N_frames)
+    dx = np.cos(radii)*0.5-0.2
+    dy = np.linspace(0, 0, N_frames)#np.sin(radii)*0.5
+    # dz = np.linspace(0, 0, N_frames)
+    # define poses
+    # dataset.poses_test = dataset.poses
+    c2ws = np.tile(np.array([[[1,0,0,0],[0,1,0,0],[0,0,1,0]]],dtype=np.float32), (N_frames, 1, 1))
+    for i in range(N_frames):
+        c2ws[i, 0, 3] += dx[i]
+        c2ws[i, 1, 3] += dy[i]
     c2ws = torch.from_numpy(c2ws).float()  # (N, 3, 4)
     c2ws = convert3x4_4x4(c2ws)  # (N, 4, 4)
 

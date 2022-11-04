@@ -110,7 +110,8 @@ class Dataloader_feature_n_colmap:
         self.W              scalar
         self.N_imgs         scalar
     """
-    def __init__(self, base_dir, scene_name, res_ratio, num_img_to_load, start=0, end=-1, skip=1, load_sorted=True, load_img=True,use_ndc=True):
+    def __init__(self, base_dir, scene_name, res_ratio, num_img_to_load, start=0, end=-1, skip=1,
+                 load_sorted=True, load_img=True,use_ndc=True, device='cpu'):
         """
         :param base_dir:
         :param scene_name:
@@ -149,7 +150,7 @@ class Dataloader_feature_n_colmap:
         self.N_imgs = image_data['N_imgs']
         self.ori_H = image_data['H']
         self.ori_W = image_data['W']
-        self.encoder = Vgg19()
+        self.encoder = Vgg19().to(device)
 
         # always use ndc
         self.near = 0.0
@@ -164,12 +165,12 @@ class Dataloader_feature_n_colmap:
         self.focal /= self.res_ratio
 
         if self.load_img:
-            self.imgs = resize_imgs(self.imgs, self.H, self.W)  # (N, H, W, 3) torch.float32
+            self.imgs = resize_imgs(self.imgs, self.H, self.W).to(device)  # (N, H, W, 3) torch.float32
             self.features = []
             for img in tqdm(self.imgs):
                 self.features.append(self.encoder(img.permute(2,0,1)[None,...]))
-            self.features = torch.cat(self.features,0)
-            print(self.features.shape)
+            # self.features = torch.cat(self.features,0)
+            # print(self.features.shape)
 
 if __name__ == '__main__':
     base_dir = '/your/data/path'
