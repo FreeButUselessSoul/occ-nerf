@@ -1,0 +1,5 @@
+nohup python tasks/homo/train_maskDL_long.py --base_dir ~/data/sigGraph15/ --scene_name rain/images --resize_ratio 1 --gpu_id 0 --alias 1102 --pose_lr 1e-4 --focal_lr 1e-4 --nerf_lr 1e-4 --fx_only True --num_rows_eval_img 20 --epoch 100 --eval_interval 1 > rain.txt &
+
+nohup python tasks/homo/train_maskDL_FT.py --base_dir ~/data/colmap/ --scene_name square/images --resize_ratio 2 --gpu_id 0 --alias 1102 --pose_lr 3e-3 --focal_lr 1e-3 --nerf_lr 5e-4 --fx_only True --num_rows_eval_img 20 --epoch 10000 > square.txt &
+
+nohup python tasks/homo/train_maskDL_long.py --base_dir ~/data/colmap/ --scene_name fence1/images --resize_ratio 2 --gpu_id 0 --alias 1020 --pose_lr 3e-5 --focal_lr 1e-5 --nerf_lr 1e-4 --fx_only True --num_rows_eval_img 20 --epoch 100 --resume --ckpt_dir logs/homo_back_dl/fence1/images/lr_0.0001_gpu0_seed_17_resize_2_Nsam_128_Ntr_img_-1_freq_10_1020_221028_1316/ --eval_interval 1 > fence1.txt &
