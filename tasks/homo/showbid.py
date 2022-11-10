@@ -85,6 +85,7 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
     mask_list = []
     back_img_list = []
     back_depth_list = []
+    bid_list = []
 
     for i in tqdm(range(N_img)):
         c2w = c2ws[i].to(my_devices)  # (4, 4)
@@ -95,6 +96,7 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
         rendered_depth = []
         mask = []
         back_img = []
+        bid = []
         back_depth = []
 
         for rays_dir_rows in rays_dir_cam_split_rows:
@@ -103,6 +105,7 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
             rgb_rendered_rows = render_result['rgb']  # (num_rows_eval_img, W, 3)
             depth_map = render_result['depth_map']  # (num_rows_eval_img, W)
             dens = render_result['weight'].clone().detach()
+            bid.append((render_result['depth_reverse']-render_result['depth_map']).clone().detach())
             dens = torch.cat([dens, render_result['depth_map'].unsqueeze(-1).clone().detach(), render_result['depth_reverse'].unsqueeze(-1).clone().detach()], -1)
             # dens = render_result['rgb_density'][...,-1].clone().detach()
             # dens = F.normalize(dens,dim=-1)
@@ -110,10 +113,9 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
             # mask = occlusion_net(encode_position(dir_,2,True)).reshape(depth_map.shape[0],depth_map.shape[1],1)
             mask_row = occlusion_net(dens).squeeze(-1)
             back_results = render_back(c2w, rays_dir_rows,
-            #  torch.linspace(near+0.2, far, args.num_sample, device=my_devices),
-            # t_vals,
-            1/(1/(near+0.2+1e-15) * (1 - t_vals) + 1/far * t_vals),
-              near+0.2, far, H, W, fxfy,
+            #  torch.linspace(near, far, args.num_sample, device=my_devices),
+            1/(1/(near+1e-15) * (1 - t_vals) + 1/far * t_vals),
+              near, far, H, W, fxfy,
                                                model_back, False, 0.0, args, rgb_act_fn=torch.sigmoid,progress=1)
             rendered_img.append(rgb_rendered_rows)
             rendered_depth.append(depth_map)
@@ -127,6 +129,7 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
         mask = torch.cat(mask,0) # (H,W)
         back_img = torch.cat(back_img, 0) # (H, W, 3)
         back_depth = torch.cat(back_depth, 0) # (H, W)
+        bid = torch.cat(bid, 0)
 
         # for vis
         rendered_img_list.append(rendered_img)
@@ -134,12 +137,14 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
         mask_list.append(mask)
         back_img_list.append(back_img)
         back_depth_list.append(back_depth)
+        bid_list.append(bid)
 
     rendered_img_list = torch.stack(rendered_img_list)  # (N, H, W, 3)
     rendered_depth_list = torch.stack(rendered_depth_list)  # (N, H, W)
     mask_list = torch.stack(mask_list)
     back_img_list = torch.stack(back_img_list)
     back_depth_list = torch.stack(back_depth_list)
+    bid_list = torch.stack(bid_list)
 
     result = {
         'imgs': rendered_img_list,
@@ -147,6 +152,7 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
         'bg': back_img_list,
         'bg_depth': back_depth_list,
         'mask': mask_list,
+        'bid': bid_list,
     }
     return result
 
@@ -284,25 +290,27 @@ def main(args):
     bg_imgs = (result['bg'].cpu().numpy() * 255).astype(np.uint8)
     bg_depth = (result['bg_depth'].cpu().numpy() * 255).astype(np.uint8)
     mask = ((result['mask']<0.5).cpu().numpy() * 255).astype(np.uint8)
+    bid = (result['bid'].cpu().numpy()*255).astype(np.uint8)
 
     for i in range(c2ws.shape[0]):
-        imageio.imwrite(os.path.join(img_out_dir, str(i).zfill(4) + '.png'), imgs[i])
-        imageio.imwrite(os.path.join(depth_out_dir, str(i).zfill(4) + '.png'), depths[i])
-        imageio.imwrite(os.path.join(bg_img_out_dir, str(i).zfill(4) + '.png'), bg_imgs[i])
-        imageio.imwrite(os.path.join(bg_depth_out_dir, str(i).zfill(4) + '.png'), bg_depth[i])
-        imageio.imwrite(os.path.join(mask_dir, str(i).zfill(4) + '.png'), mask[i])
+        imageio.imwrite(os.path.join(img_out_dir, str(i).zfill(4) + '.jpg'), imgs[i])
+        imageio.imwrite(os.path.join(depth_out_dir, str(i).zfill(4) + '.jpg'), depths[i])
+        imageio.imwrite(os.path.join(bg_img_out_dir, str(i).zfill(4) + '.jpg'), bg_imgs[i])
+        imageio.imwrite(os.path.join(bg_depth_out_dir, str(i).zfill(4) + '.jpg'), bg_depth[i])
+        imageio.imwrite(os.path.join(mask_dir, str(i).zfill(4) + '.jpg'), mask[i])
+        imageio.imwrite(os.path.join(depth_out_dir, 'rev-'+str(i).zfill(4)+'.jpg'),bid[i] )
 
-    imageio.mimwrite(os.path.join(video_out_dir, 'img.mp4'), imgs, fps=30, quality=9)
-    imageio.mimwrite(os.path.join(video_out_dir, 'depth.mp4'), depths, fps=30, quality=9)
-    imageio.mimwrite(os.path.join(video_out_dir, 'bg_img.mp4'), bg_imgs, fps=30, quality=9)
-    imageio.mimwrite(os.path.join(video_out_dir, 'bg_depth.mp4'), bg_depth, fps=30, quality=9)
-    imageio.mimwrite(os.path.join(video_out_dir, 'mask.mp4'), mask, fps=30, quality=9)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'img.mp4'), imgs, fps=30, quality=9)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'depth.mp4'), depths, fps=30, quality=9)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'bg_img.mp4'), bg_imgs, fps=30, quality=9)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'bg_depth.mp4'), bg_depth, fps=30, quality=9)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'mask.mp4'), mask, fps=30, quality=9)
 
-    imageio.mimwrite(os.path.join(video_out_dir, 'img.gif'), imgs, fps=30)
-    imageio.mimwrite(os.path.join(video_out_dir, 'depth.gif'), depths, fps=30)
-    imageio.mimwrite(os.path.join(video_out_dir, 'bg_img.gif'), bg_imgs, fps=30)
-    imageio.mimwrite(os.path.join(video_out_dir, 'bg_depth.gif'), bg_depth, fps=30)
-    imageio.mimwrite(os.path.join(video_out_dir, 'mask.gif'), mask, fps=30)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'img.gif'), imgs, fps=30)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'depth.gif'), depths, fps=30)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'bg_img.gif'), bg_imgs, fps=30)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'bg_depth.gif'), bg_depth, fps=30)
+    # imageio.mimwrite(os.path.join(video_out_dir, 'mask.gif'), mask, fps=30)
 
     return
 
