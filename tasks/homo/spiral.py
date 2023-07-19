@@ -17,7 +17,7 @@ from utils.training_utils import set_randomness, load_ckpt_to_net
 from utils.pose_utils import create_spiral_poses
 from utils.comp_ray_dir import comp_ray_dir_cam_fxfy
 from utils.lie_group_helper import convert3x4_4x4
-from models.nerf_models import fullNeRF
+from models.nerf_models import fullNeRF,OfficialNerf
 from tasks.homo.train_maskDL_long import model_render_image,render_back
 from models.intrinsics import LearnFocal
 from models.poses import LearnPose
@@ -77,7 +77,6 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
     fxfy = focal_net(0)
     ray_dir_cam = comp_ray_dir_cam_fxfy(H, W, fxfy[0], fxfy[1])
     t_vals = torch.linspace(near, far, args.num_sample, device=my_devices)  # (N_sample,) sample position
-    # t_vals = 1/(1/(near+1e-15) * (1 - t_steps) + 1/far * t_steps)
     N_img = c2ws.shape[0]
 
     rendered_img_list = []
@@ -98,7 +97,7 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
         back_depth = []
 
         for rays_dir_rows in rays_dir_cam_split_rows:
-            render_result = model_render_image(c2w, rays_dir_rows, t_vals, near, far, H, W, fxfy,
+            render_result = model_render_image(c2w, rays_dir_rows, torch.linspace(near+0.5, far, args.num_sample, device=my_devices), near, far, H, W, fxfy,
                                                model, False, 0.0,args,rgb_act_fn=torch.sigmoid,istrain=False,progress=1)
             rgb_rendered_rows = render_result['rgb']  # (num_rows_eval_img, W, 3)
             depth_map = render_result['depth_map']  # (num_rows_eval_img, W)
@@ -109,8 +108,11 @@ def test_one_epoch(H, W, focal_net, c2ws, near, far, model,model_back,occlusion_
             # dir_ = get_ray_dir(c2w, rays_dir_rows, t_vals, scene_train.H, scene_train.W, fxfy)
             # mask = occlusion_net(encode_position(dir_,2,True)).reshape(depth_map.shape[0],depth_map.shape[1],1)
             mask_row = occlusion_net(dens).squeeze(-1)
-            back_results = render_back(c2w, rays_dir_rows, t_vals, near, far, H, W, fxfy,
-                                               model_back, False, 0.0, args, rgb_act_fn=torch.sigmoid,progress=1)
+            back_results = render_back(c2w, rays_dir_rows,
+                t_vals,
+                # torch.linspace(near, far, args.num_sample, device=my_devices),
+                near, far, H, W, fxfy,
+                model_back, False, 0.0, args, rgb_act_fn=torch.sigmoid,progress=1)
             rendered_img.append(rgb_rendered_rows)
             rendered_depth.append(depth_map)
             mask.append(mask_row)
@@ -192,7 +194,7 @@ def main(args):
     else:
         dir_enc_in_dims = 0
 
-    model = fullNeRF(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims,6,[3])
+    model = OfficialNerf(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims)#,6,[3])
     if args.multi_gpu:
         model = torch.nn.DataParallel(model).to(device=my_devices)
     else:
@@ -216,7 +218,7 @@ def main(args):
         focal_net = focal_net.to(device=my_devices)
     # do not load learned focal if we use colmap focal
     if not args.init_focal_colmap:
-        load_ckpt_to_net(os.path.join(args.ckpt_dir, 'latest_focal.pth'), focal_net, map_location=my_devices)
+        load_ckpt_to_net(os.path.join(args.ckpt_dir, 'latest_focal.pth'), focal_net, map_location=my_devices,strict=True)
     fxfy = focal_net(0)
     print('COLMAP focal: {0:.2f}, learned fx: {1:.2f}, fy: {2:.2f}'.format(colmap_focal, fxfy[0].item(), fxfy[1].item()))
 
@@ -228,7 +230,7 @@ def main(args):
         pose_param_net = torch.nn.DataParallel(pose_param_net).to(device=my_devices)
     else:
         pose_param_net = pose_param_net.to(device=my_devices)
-    load_ckpt_to_net(os.path.join(args.ckpt_dir, 'latest_pose.pth'), pose_param_net, map_location=my_devices)
+    load_ckpt_to_net(os.path.join(args.ckpt_dir, 'latest_pose.pth'), pose_param_net, map_location=my_devices,strict=True)
 
     occlusion_net = nn.Sequential(
         nn.Linear(args.num_sample+2,64),nn.LeakyReLU(0.1),
@@ -248,24 +250,30 @@ def main(args):
     # hardcoded, this is numerically close to the formula
     # given in the original repo. Mathematically if near=1
     # and far=infinity, then this number will converge to 4
-    N_novel_imgs = args.N_img_per_circle * args.N_circle_traj
+    # N_novel_imgs = args.N_img_per_circle * args.N_circle_traj
     # focus_depth = 3.5
     # radii = np.percentile(np.abs(learned_poses.cpu().numpy()[:, :3, 3]), args.spiral_mag_percent, axis=0)  # (3,)
     # radii *= np.array(args.spiral_axis_scale)
     # c2ws = create_spiral_poses(radii, focus_depth, n_circle=args.N_circle_traj, n_poses=N_novel_imgs)
     N_frames = 60
     radii = np.linspace(0, np.pi*2, N_frames)
-    # dx = np.linspace(0, 0.3, N_frames)
-    # dy = np.linspace(0, 0, N_frames)
-    dx = np.cos(radii)*0.5-0.2
-    dy = np.linspace(0, 0, N_frames)#np.sin(radii)*0.5
-    # dz = np.linspace(0, 0, N_frames)
+    dx = np.linspace(0, 0.3, N_frames)
+    dy = np.linspace(0, 0, N_frames)
+    # dx = np.cos(np.pi+radii)*1.5
+    # dcos = np.cos(radii/8-np.pi/16) # -pi/3~pi/3
+    # dsin = np.sin(radii/8-np.pi/16) # -pi/3~pi/3
+    # dy = np.linspace(0, 0, N_frames)#np.sin(radii)*0.5
+    dz = np.linspace(0, 0, N_frames)
     # define poses
     # dataset.poses_test = dataset.poses
-    c2ws = np.tile(np.array([[[1,0,0,0],[0,1,0,0],[0,0,1,0]]],dtype=np.float32), (N_frames, 1, 1))
-    for i in range(N_frames):
+    c2ws = np.tile(np.array([[[1,0,0,0],[0,1,0,0],[0,0,1,0]]],dtype=np.float32), (N_frames//2, 1, 1))
+    for i in range(N_frames//2):
         c2ws[i, 0, 3] += dx[i]
         c2ws[i, 1, 3] += dy[i]
+        # c2ws[i, 0, 0] = dcos[i]
+        # c2ws[i, 0, 2] = -dsin[i]
+        # c2ws[i, 2, 0] = dsin[i]
+        # c2ws[i, 2, 2] = dcos[i]
     c2ws = torch.from_numpy(c2ws).float()  # (N, 3, 4)
     c2ws = convert3x4_4x4(c2ws)  # (N, 4, 4)
 

@@ -7,6 +7,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 import imageio
+import piq
 
 sys.path.append(os.path.join(sys.path[0], '../..'))
 
@@ -135,7 +136,7 @@ def main(args):
                                        num_img_to_load=args.train_img_num,
                                        skip=args.train_skip,
                                        use_ndc=args.use_ndc,
-                                       load_img=False)
+                                       load_img=True)
 
     H, W = scene_train.H, scene_train.W
     colmap_focal = scene_train.focal
@@ -184,47 +185,20 @@ def main(args):
 
     learned_poses = torch.stack([pose_param_net(i) for i in range(scene_train.N_imgs)])
 
-    '''Generate camera traj'''
-    # This spiral camera traj code is modified from https://github.com/kwea123/nerf_pl.
-    # hardcoded, this is numerically close to the formula
-    # given in the original repo. Mathematically if near=1
-    # and far=infinity, then this number will converge to 4
-    # N_novel_imgs = args.N_img_per_circle * args.N_circle_traj
-    N_frames = 60
-    radii = np.linspace(0, np.pi*2, N_frames)
-    # dx = np.linspace(0, 0.3, N_frames)
-    # dy = np.linspace(0, 0, N_frames)
-    dx = np.cos(radii)*0.2
-    dy = np.linspace(0, 0, N_frames)#np.sin(radii)*0.5
-    # dz = np.linspace(0, 0, N_frames)
-    # define poses
-    # dataset.poses_test = dataset.poses
-    c2ws = np.tile(np.array([[[1,0,0,0],[0,1,0,0],[0,0,1,0]]],dtype=np.float32), (N_frames//2, 1, 1))
-    for i in range(N_frames//2):
-        c2ws[i, 0, 3] += dx[i]
-        c2ws[i, 1, 3] += dy[i]
-    c2ws = torch.from_numpy(c2ws).float()  # (N, 3, 4)
-    c2ws = convert3x4_4x4(c2ws)  # (N, 4, 4)
-
-    '''Render'''
-    result = test_one_epoch(H, W, focal_net, c2ws, near, far, model, my_devices, args)
+    result = test_one_epoch(H, W, focal_net, learned_poses, near, far, model, my_devices, args)
     imgs = result['imgs']
-    depths = result['depths']
+    # depths = result['depths']
+    psnrs,lpips,ssims = [],[],[]
+    for i in range(scene_train.N_imgs):
+        img_gt = scene_train.imgs[i].clone().detach().permute(2,0,1).unsqueeze(0)
+        img_pred = imgs[i].to(img_gt.device).clone().detach().permute(2,0,1).unsqueeze(0)
+        psnrs += [piq.psnr(img_gt, img_pred).item()]
+        lpips += [piq.LPIPS(reduction='none')(img_pred, img_gt)]
+        ssims += [piq.ssim(img_pred, img_gt)]
 
-    '''Write to folder'''
-    imgs = (imgs.cpu().numpy() * 255).astype(np.uint8)
-    depths = (depths.cpu().numpy() * 255).astype(np.uint8)  # far is 1.0 in NDC
-
-    for i in range(c2ws.shape[0]):
-        imageio.imwrite(os.path.join(img_out_dir, str(i).zfill(4) + '.png'), imgs[i])
-        imageio.imwrite(os.path.join(depth_out_dir, str(i).zfill(4) + '.png'), depths[i])
-
-    imageio.mimwrite(os.path.join(video_out_dir, 'img.mp4'), imgs, fps=30, quality=9)
-    imageio.mimwrite(os.path.join(video_out_dir, 'depth.mp4'), depths, fps=30, quality=9)
-
-    imageio.mimwrite(os.path.join(video_out_dir, 'img.gif'), imgs, fps=30)
-    imageio.mimwrite(os.path.join(video_out_dir, 'depth.gif'), depths, fps=30)
-
+    print(f'Mean PSNR : {torch.mean(torch.Tensor(psnrs)):.2f}')
+    print(f'Mean SSIM : {torch.mean(torch.Tensor(ssims)):.2f}')
+    print(f'Mean LPIPS : {torch.mean(torch.Tensor(lpips)):.2f}')
     return
 
 

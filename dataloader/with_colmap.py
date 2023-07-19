@@ -41,41 +41,6 @@ def load_imgs(image_dir, img_ids, new_h, new_w):
     return img_list, img_names
 
 
-def load_split(scene_dir, img_dir, data_type, num_img_to_load, skip, c2ws,
-               H, W, load_img):
-    # load pre-splitted train/val ids
-    img_ids = np.loadtxt(os.path.join(scene_dir, data_type + '_ids.txt'), dtype=np.int32, ndmin=1)
-    if num_img_to_load == -1:
-        img_ids = img_ids[::skip]
-        print('Loading all available {0:6d} images'.format(len(img_ids)))
-    elif num_img_to_load > len(img_ids):
-        print('Required {0:4d} images but only {1:4d} images available. '
-              'Exit'.format(num_img_to_load, len(img_ids)))
-        exit()
-    else:
-        img_ids = img_ids[:num_img_to_load:skip]
-
-    N_imgs = img_ids.shape[0]
-
-    # use img_ids to select camera poses
-    c2ws = c2ws[img_ids]  # (N, 3, 4)
-
-    # load images
-    if load_img:
-        imgs, img_names = load_imgs(img_dir, img_ids, H, W)  # (N, H, W, 3) torch.float32
-    else:
-        imgs, img_names = None, None
-
-    result = {
-        'c2ws': c2ws,  # (N, 3, 4) np.float32
-        'imgs': imgs,  # (N, H, W, 3) torch.float32
-        'img_names': img_names,  # (N, )
-        'N_imgs': N_imgs,
-        'img_ids': img_ids,  # (N, ) np.int
-    }
-    return result
-
-
 def read_meta(in_dir, use_ndc):
     """
     Read the poses_bounds.npy file produced by LLFF imgs2poses.py.
@@ -155,7 +120,6 @@ class DataLoaderWithCOLMAP:
         self.H = meta['H']
         self.W = meta['W']
         self.focal = float(meta['focal'])
-        self.total_N_imgs = self.c2ws.shape[0]
 
         if self.res_ratio > 1:
             self.H = self.H // self.res_ratio
@@ -164,15 +128,9 @@ class DataLoaderWithCOLMAP:
 
         self.near = 0.0
         self.far = 1.0
-
-        '''Load train/val split'''
-        split_results = load_split(self.scene_dir, self.img_dir, self.data_type, self.num_img_to_load,
-                                   self.skip, self.c2ws, self.H, self.W, self.load_img)
-        self.c2ws = split_results['c2ws']  # (N, 4, 4) np.float32
-        self.imgs = split_results['imgs']  # (N, H, W, 3) torch.float32
-        self.img_names = split_results['img_names']  # (N, )
-        self.N_imgs = split_results['N_imgs']
-        self.img_ids = split_results['img_ids']  # (N, ) np.int
+        self.imgs, self.img_names = load_imgs(self.img_dir, np.arange(num_img_to_load), self.H, self.W)  # (N, H, W, 3) torch.float32
+        self.c2ws = self.c2ws[:num_img_to_load]
+        self.N_imgs = self.c2ws.shape[0]
 
         # generate cam ray dir.
         self.ray_dir_cam = comp_ray_dir_cam(self.H, self.W, self.focal)  # (H, W, 3) torch.float32

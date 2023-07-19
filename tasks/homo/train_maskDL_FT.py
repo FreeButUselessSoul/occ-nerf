@@ -241,7 +241,7 @@ def render_back(c2w, rays_cam, t_vals, near, far, H, W, fxfy, model, perturb_t, 
     sample_pos, ray_ori_world, ray_dir_world, t_vals_noisy = volume_sampling_ndc(c2w, rays_cam, t_vals, near, far,
                                                                      H, W, fxfy, perturb_t,True)
     # encode position: (H, W, N_sample, (2L+1)*C = 63)
-    pos_enc = encode_position(sample_pos, levels=args.pos_enc_levels, inc_input=args.pos_enc_inc_in)
+    pos_enc = barf_encode_position(sample_pos, levels=args.pos_enc_levels, inc_input=args.pos_enc_inc_in,progress=progress)
 
     # encode direction: (H, W, N_sample, (2L+1)*C = 27)
     if args.use_dir_enc:
@@ -313,7 +313,7 @@ def model_render_image(c2w, rays_cam, t_vals, near, far, H, W, fxfy, model, pert
         # warpped_features = cost_volume_cnn(warpped_features.transpose(1,2).flatten(0,1)).view(temp_shape).transpose(1,2) # B,C,D,H,W
         cost_volume = non_nan_var(warpped_features, 0).permute(2,3,1,0) # B,C',D,H,W
     # encode position: (H, W, N_sample, (2L+1)*C = 63)
-    pos_enc = encode_position(sample_pos, levels=args.pos_enc_levels, inc_input=args.pos_enc_inc_in)
+    pos_enc = barf_encode_position(sample_pos, levels=args.pos_enc_levels, inc_input=args.pos_enc_inc_in,progress=progress)
 
     # encode direction: (H, W, N_sample, (2L+1)*C = 27)
     if args.use_dir_enc:
@@ -469,10 +469,10 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
                 bg_rgb_rendered_rows = back_render['rgb']
                 bg_depth_map = back_render['depth_map']
                 bg_depth_map_R = back_render['depth_reverse']
-                dens = render_result['rgb_density'][...,-1].clone().detach()
-                dens = F.normalize(dens,dim=-1)
-                # dens = render_result['weight'].clone().detach()
-                # dens = torch.cat([dens, render_result['depth_map'].unsqueeze(-1).clone().detach(), render_result['depth_reverse'].unsqueeze(-1).clone().detach()], -1)
+                # dens = render_result['rgb_density'][...,-1].clone().detach()
+                # dens = F.normalize(dens,dim=-1)
+                dens = render_result['weight'].clone().detach()
+                dens = torch.cat([dens, render_result['depth_map'].unsqueeze(-1).clone().detach(), render_result['depth_reverse'].unsqueeze(-1).clone().detach()], -1)
                 # dir_ = get_ray_dir(c2w, rays_dir_rows, t_vals, scene_train.H, scene_train.W, fxfy)
                 # mask = occlusion_net(encode_position(dir_,2,True)).reshape(depth_map.shape[0],depth_map.shape[1],1)
                 mask = occlusion_net(dens)
@@ -558,14 +558,14 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         # others = np.concatenate( [np.arange(i),np.arange(i+1,N_img)], 0 )
         # np.random.shuffle(others)
         # others = np.concatenate( [[i], others], 0)
-        others = [(i-2+N_img)%N_img,(i-1+N_img)%N_img,i,(i+1)%N_img,(i+2)%N_img ]
+        # others = [(i-2+N_img)%N_img,(i-1+N_img)%N_img,i,(i+1)%N_img,(i+2)%N_img ]
         
-        # c2ws_all = torch.stack([pose_param_net(j) for j in range(N_img)],0)
-        # others = torch.argsort(torch.sum((c2ws_all-c2w)[:,:3,3]**2,axis=-1),descending=True)
+        c2ws_all = torch.stack([pose_param_net(j) for j in range(N_img)],0).detach()
+        others = torch.argsort(torch.sum((c2ws_all-c2w)[:,:3,3]**2,axis=-1),descending=False)
         # cost volume construction here - 0903
         to_matrix = torch.inverse(K @ c2w)
         features,proj_mats = [], []
-        for j in others[:5]:
+        for j in others[:4]:
             c2w_from = pose_param_net(j) # (4,4)
             proj_mats.append( (K @ c2w_from) @ to_matrix)
             features.append(scene_train.features[j])
@@ -591,10 +591,10 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         # else:
         L2_loss = F.mse_loss(rgb_rendered, img_selected)
         # smoothL1_loss = F.smooth_l1_loss(rgb_rendered, img_selected)
-        # dens = render_result['weight'].clone().detach()
-        # dens = torch.cat([dens, render_result['depth_map'].unsqueeze(-1).clone().detach(), render_result['depth_reverse'].unsqueeze(-1).clone().detach()], -1)
-        dens = render_result['rgb_density'][...,-1].clone().detach()
-        dens = F.normalize(dens,dim=-1)
+        dens = render_result['weight'].clone().detach()
+        dens = torch.cat([dens, render_result['depth_map'].unsqueeze(-1).clone().detach(), render_result['depth_reverse'].unsqueeze(-1).clone().detach()], -1)
+        # dens = render_result['rgb_density'][...,-1].clone().detach()
+        # dens = F.normalize(dens,dim=-1)
         # dir_ = get_ray_dir(c2w.detach(), ray_selected_cam.detach(), t_vals.detach(), scene_train.H, scene_train.W, fxfy.detach())
         # mask = occlusion_net(encode_position(dir_,2,True))
         mask = occlusion_net(dens)
@@ -604,7 +604,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         # mask_regularizer = 0.0001*torch.mean(mask)
         # threshold = min(torch.min(render_result['depth_map'])+.2,0.98)
         # = (torch.clamp(render_result['depth_map'].unsqueeze(-1),threshold,1))/(1-threshold)
-        if epoch_i>0.3*args.epoch or (args.resume and epoch_i>0.05*args.epoch):
+        if epoch_i>0.3*args.epoch or (args.resume and epoch_i>0.2*args.epoch):
             bg_result = render_back(c2w.detach(), ray_selected_cam.detach(),
                             t_vals,
                             # 1/(1/(scene_train.near+1e-15) * (1 - t_steps) + 1/scene_train.far * t_steps),
@@ -631,7 +631,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
             tot_loss = L2_loss+0.03*corr_loss
             masked_loss = torch.Tensor([0])
         if need_istrain:
-            cost_volume_loss = 5*torch.mean(render_result['cost_volume'])
+            cost_volume_loss = 50*torch.mean(render_result['cost_volume'])
             tot_loss += cost_volume_loss
         else:
             cost_volume_loss = torch.Tensor([0])
@@ -639,8 +639,9 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         tot_loss.backward()
         optimizer_nerf.step()
         optimizer_back.step()
-        optimizer_focal.step()
-        optimizer_pose.step()
+        if epoch_i>0.04*args.epoch or args.resume:
+            optimizer_focal.step()
+            optimizer_pose.step()
         optimizer_occ_detect.step()
         # optimizer_volume.step()
         optimizer_nerf.zero_grad()
@@ -672,7 +673,7 @@ def main(args):
     my_devices = torch.device('cuda:' + str(args.gpu_id))
 
     '''Create Folders'''
-    exp_root_dir = Path(os.path.join('./logs/homo_back_dl/', args.scene_name))
+    exp_root_dir = Path(os.path.join('./logs/homo_supp/', args.scene_name))
     exp_root_dir.mkdir(parents=True, exist_ok=True)
     experiment_dir = Path(os.path.join(exp_root_dir, gen_detail_name(args)))
     experiment_dir.mkdir(parents=True, exist_ok=True)
@@ -718,7 +719,7 @@ def main(args):
     else:
         dir_enc_in_dims = 0
 
-    model = fullNeRF(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims,6,[3])
+    model = OfficialNerf(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims)#,6,[3])
     model.apply(init_weights)
     if args.multi_gpu:
         model = torch.nn.DataParallel(model).to(device=my_devices)
@@ -748,7 +749,7 @@ def main(args):
         pose_param_net = pose_param_net.to(device=my_devices)
     
     occlusion_net = nn.Sequential(
-        nn.Linear(args.num_sample,64),nn.LeakyReLU(0.1),
+        nn.Linear(args.num_sample+2,64),nn.LeakyReLU(0.1),
         nn.Linear(64,32),nn.LeakyReLU(0.1),
         nn.Linear(32,1),nn.Sigmoid(),
     )
@@ -784,19 +785,19 @@ def main(args):
     epoch_ckpt = 0
     if args.resume and args.ckpt_dir is not None and os.path.exists(os.path.join(args.ckpt_dir,'latest_nerf.pth')):
         print("Using saved model checkpoint..")
-        epoch_ckpt = load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerf.pth'),model,map_location=my_devices)
+        load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerf.pth'),model,map_location=my_devices)
         # load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_nerfback.pth'),model_back,map_location=my_devices)
         load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_focal.pth'),focal_net,optimizer_focal,map_location=my_devices)
         load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_pose.pth'),pose_param_net,optimizer_pose,map_location=my_devices)
-        load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_mask.pth'),occlusion_net,optimizer_occ_detect,map_location=my_devices)
+        # load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_mask.pth'),occlusion_net,optimizer_occ_detect,map_location=my_devices)
         print(f"Resume training from {epoch_ckpt} epoch.")
         # load_ckpt_to_net(os.path.join(args.ckpt_dir,'latest_mask.pth'),occlusion_net,optimizer_occ_detect,map_location=my_devices)
     # elif args.resume:
     #     import ipdb;ipdb.set_trace()
     scheduler_back = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_back, args.epoch,1e-5)
     scheduler_nerf = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_nerf, args.epoch,min(1e-5,args.nerf_lr))
-    scheduler_focal = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_focal, int(args.epoch*0.8),min(5e-5,args.focal_lr))
-    scheduler_pose = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_pose, int(args.epoch*0.8),min(5e-5,args.pose_lr))
+    scheduler_focal = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_focal, int(args.epoch),min(5e-5,args.focal_lr))
+    scheduler_pose = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_pose, int(args.epoch),min(5e-5,args.pose_lr))
     # scheduler_volume = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_volume, int(args.epoch),1e-4)
     # scene_train.features = [feature.to(my_devices) for feature in scene_train.features]
     '''Training'''
@@ -828,7 +829,10 @@ def main(args):
 
         if epoch_i % args.eval_interval == 0 and epoch_i > 0:
             with torch.no_grad():
-                eval_one_epoch(eval_c2ws, scene_train, model,model_back, focal_net, pose_param_net,occlusion_net, my_devices, args, epoch_i, writer, rgb_act_fn,progress)
+                # if (epoch_i // args.eval_interval)%2 ==0:
+                #     eval_one_epoch(pose_param_net(60)[None,...], scene_train, model,model_back, focal_net, pose_param_net,occlusion_net, my_devices, args, epoch_i, writer, rgb_act_fn,1)
+                # else:
+                eval_one_epoch(eval_c2ws, scene_train, model,model_back, focal_net, pose_param_net,occlusion_net, my_devices, args, epoch_i, writer, rgb_act_fn,1)
 
                 fxfy = focal_net(0)
                 tqdm.write('Est fx: {0:.2f}, fy {1:.2f}'.format(fxfy[0].item(), fxfy[1].item()))

@@ -364,15 +364,15 @@ def main(args):
         imgs = (imgs.cpu().numpy() * 255).astype(np.uint8)
         depths = (depths.cpu().numpy() * 10).astype(np.uint8)
 
-        for i in range(scene_eval.N_imgs):
-            imageio.imwrite(os.path.join(img_out_dir, str(i).zfill(4) + '.png'), imgs[i])
-            imageio.imwrite(os.path.join(depth_out_dir, str(i).zfill(4) + '.png'), depths[i])
+        # for i in range(scene_eval.N_imgs):
+        #     imageio.imwrite(os.path.join(img_out_dir, str(i).zfill(4) + '.png'), imgs[i])
+        #     imageio.imwrite(os.path.join(depth_out_dir, str(i).zfill(4) + '.png'), depths[i])
 
-        imageio.mimwrite(os.path.join(video_out_dir, 'img.mp4'), imgs, fps=30, quality=9)
-        imageio.mimwrite(os.path.join(video_out_dir, 'depth.mp4'), depths, fps=30, quality=9)
+        # imageio.mimwrite(os.path.join(video_out_dir, 'img.mp4'), imgs, fps=30, quality=9)
+        # imageio.mimwrite(os.path.join(video_out_dir, 'depth.mp4'), depths, fps=30, quality=9)
 
-        imageio.mimwrite(os.path.join(video_out_dir, 'img.gif'), imgs, fps=30)
-        imageio.mimwrite(os.path.join(video_out_dir, 'depth.gif'), depths, fps=30)
+        # imageio.mimwrite(os.path.join(video_out_dir, 'img.gif'), imgs, fps=30)
+        # imageio.mimwrite(os.path.join(video_out_dir, 'depth.gif'), depths, fps=30)
         return
 
 
