@@ -194,7 +194,7 @@ def main(args):
     else:
         dir_enc_in_dims = 0
 
-    model = OfficialNerf(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims)#,6,[3])
+    model = fullNeRF(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims,6,[3])
     if args.multi_gpu:
         model = torch.nn.DataParallel(model).to(device=my_devices)
     else:
@@ -287,7 +287,7 @@ def main(args):
     depths = (depths.cpu().numpy() * 255).astype(np.uint8)  # far is 1.0 in NDC # 200
     bg_imgs = (result['bg'].cpu().numpy() * 255).astype(np.uint8)
     bg_depth = (result['bg_depth'].cpu().numpy() * 255).astype(np.uint8)
-    mask = (result['mask'].cpu().numpy() * 255).astype(np.uint8)
+    mask = ((result['mask']<0.5).cpu().numpy() * 255).astype(np.uint8)
 
     for i in range(c2ws.shape[0]):
         imageio.imwrite(os.path.join(img_out_dir, str(i).zfill(4) + '.png'), imgs[i])

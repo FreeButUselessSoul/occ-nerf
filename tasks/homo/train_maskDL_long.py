@@ -671,7 +671,7 @@ def main(args):
     else:
         dir_enc_in_dims = 0
 
-    model = OfficialNerf(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims)
+    model = fullNeRF(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims,6,[3])
     model.apply(init_weights)
     if args.multi_gpu:
         model = torch.nn.DataParallel(model).to(device=my_devices)

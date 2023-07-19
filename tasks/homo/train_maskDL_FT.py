@@ -599,7 +599,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         # mask = occlusion_net(encode_position(dir_,2,True))
         mask = occlusion_net(dens)
         depth_ssa = (render_result['depth_reverse']-render_result['depth_map']).clone().detach()
-        corr_loss = 1-F.cosine_similarity( (mask-0.5).flatten(),(depth_ssa-0.1).flatten(),0)
+        corr_loss = 1-F.cosine_similarity( (mask-0.5).flatten(),(depth_ssa-0.15).flatten(),0)
         # corr_loss = F.smooth_l1_loss(mask.flatten(),depth_ssa.flatten())
         # mask_regularizer = 0.0001*torch.mean(mask)
         # threshold = min(torch.min(render_result['depth_map'])+.2,0.98)
@@ -639,7 +639,7 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
         tot_loss.backward()
         optimizer_nerf.step()
         optimizer_back.step()
-        if epoch_i>0.04*args.epoch or args.resume:
+        if epoch_i>0.1*args.epoch or args.resume:
             optimizer_focal.step()
             optimizer_pose.step()
         optimizer_occ_detect.step()
@@ -719,7 +719,7 @@ def main(args):
     else:
         dir_enc_in_dims = 0
 
-    model = OfficialNerf(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims)#,6,[3])
+    model = fullNeRF(pos_enc_in_dims, dir_enc_in_dims, args.hidden_dims,6,[3])
     model.apply(init_weights)
     if args.multi_gpu:
         model = torch.nn.DataParallel(model).to(device=my_devices)
@@ -805,7 +805,7 @@ def main(args):
         progress = min((epoch_ckpt+epoch_i)/args.epoch,1)
         rgb_act_fn = torch.sigmoid
         train_epoch_losses = train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose,optimizer_occ_detect,optimizer_back,
-                                             model,model_back, focal_net, pose_param_net, occlusion_net, my_devices, args, rgb_act_fn, epoch_i,progress)
+                                             model,model_back, focal_net, pose_param_net, occlusion_net, my_devices, args, rgb_act_fn, epoch_i,1)
         train_L2_loss = train_epoch_losses['L2']
         train_cost_volume_loss = train_epoch_losses['cost_volume']
         train_mask_loss = train_epoch_losses['mask']
