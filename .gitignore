@@ -3,3 +3,4 @@ logs/
 __pycache__/
 nohup.out 
 results/
+data/**

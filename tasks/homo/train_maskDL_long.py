@@ -38,7 +38,8 @@ def init_weights(m):
 
 def non_nan_var(inputs, dim=0):
     num = torch.sum(~torch.isnan(inputs),dim)
-    a0 = torch.nan_to_num(inputs,0)
+    # a0 = torch.nan_to_num(inputs,0)
+    a0 = torch.where(inputs!=inputs,inputs,torch.zeros_like(inputs))
     output = torch.sum((a0+1e-10)**2,dim)/(num+1e-5) - (torch.sum(a0+1e-10,dim)/(num+1e-5))**2
     output[num==0] = 0
     return output
@@ -173,7 +174,7 @@ def parse_args():
     parser.add_argument('--eval_interval', default=1, type=int, help='run eval every this epoch number')
 
     parser.add_argument('--gpu_id', default=0, type=int)
-    # parser.add_argument('--multi_gpu',  default=False, type=eval, choices=[True, False])
+    parser.add_argument('--multi_gpu',  default=False, type=eval, choices=[True, False])
     ## Multi-GPU not supported for now
     parser.add_argument('--base_dir', type=str, default='./data_dir/nerfmm_release_data')
     parser.add_argument('--scene_name', type=str, default='any_folder_demo/desk')
@@ -427,6 +428,7 @@ def eval_one_epoch(eval_c2ws, scene_train, model, model_back, focal_net, pose_pa
                 bg_depth_map_R = back_render['depth_reverse']
 
                 dens = render_result['weight'].clone().detach() # A slight modification from the paper
+                dens = torch.cat([dens, render_result['depth_map'].unsqueeze(-1).clone().detach(), render_result['depth_reverse'].unsqueeze(-1).clone().detach()], -1)
                 # dens = render_result['rgb_density'][...,-1].clone().detach()
                 mask = occlusion_net(dens)
 
@@ -532,8 +534,8 @@ def train_one_epoch(scene_train, optimizer_nerf, optimizer_focal, optimizer_pose
                 proj_mats.append( (K @ c2w_from) @ to_matrix)
                 features.append(scene_train.features[j])
             h_,w_=torch.meshgrid(r_id, c_id)
-            h_ = 2 * h_/scene_train.H - 1
-            w_ = 2 * w_/scene_train.W - 1
+            h_ = 2 * h_.float()/scene_train.H - 1
+            w_ = 2 * w_.float()/scene_train.W - 1
             pixel_i = torch.stack([h_,w_])
     ##
             # render an image using selected rays, pose, sample intervals, and the network
